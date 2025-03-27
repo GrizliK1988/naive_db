@@ -1,3 +1,17 @@
+mod util;
+mod tuple;
+mod page;
+
+use page::Page;
+use tuple::{ Tuple, TupleValue };
+
 fn main() {
-    println!("Hello, world!");
+    let mut p = Page::new();
+
+    let t1 = Tuple {
+        types: &["integer", "integer"],
+        values: vec![TupleValue::Integer(10), TupleValue::Integer(22)],
+    };
+    
+    p.write(&t1);
 }
