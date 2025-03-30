@@ -20,7 +20,7 @@ fn test_create_page() {
     let mut p = Page::new();
 
     assert_eq!(p.slots, 0);
-    assert_eq!(p.free_space, 1024 * 16 - 4);
+    assert_eq!(p.free_space, 1024 * 8 - 4);
 
     {
         /* Tuple 0 */
@@ -29,7 +29,7 @@ fn test_create_page() {
             values: vec![ TupleValue::Integer(10), TupleValue::Varchar("Hello!".to_owned()) ],
         };
     
-        let slot = p.write(&tuple);
+        let slot = p.write(&tuple).unwrap();
         assert_eq!(slot.id, 0);
     
         let tuple_read = p.read(slot.id, &["integer", "varchar"]).unwrap();
@@ -45,7 +45,7 @@ fn test_create_page() {
             values: vec![ TupleValue::Varchar("It's me again".to_owned()), TupleValue::Varchar("lalalala".to_owned()) ],
         };
 
-        let slot = p.write(&tuple);
+        let slot = p.write(&tuple).unwrap();
         assert_eq!(slot.id, 1);
 
         let tuple_read = p.read(slot.id, &["varchar", "varchar"]).unwrap();
@@ -65,10 +65,10 @@ fn test_create_page() {
             ],
         };
 
-        let slot = p.write(&tuple);
+        let slot = p.write(&tuple).unwrap();
         assert_eq!(slot.id, 2);
 
-        assert_eq!(p.has_space(&tuple), true);
+        assert_eq!(p.has_space(&tuple).unwrap(), true);
 
         let tuple_read = p.read(slot.id, &["varchar", "varchar", "integer"]).unwrap();
         assert_eq!(tuple_read, Tuple {
@@ -78,7 +78,7 @@ fn test_create_page() {
     }
 
     {
-        let vec = vec![b' '; 70_000];
+        let vec = vec![b' '; 20_000];
         let s = String::from_utf8(vec).expect("Invalid UTF-8 string");
 
         let tuple = Tuple {
@@ -88,11 +88,11 @@ fn test_create_page() {
             ],
         };
 
-        assert_eq!(p.has_space(&tuple), false);
+        assert_eq!(p.has_space(&tuple).unwrap(), false);
     }
 
     {
-        let vec = vec![b' '; 15_000];
+        let vec = vec![b' '; 7_000];
         let s = String::from_utf8(vec).expect("Invalid UTF-8 string");
 
         let tuple = Tuple {
@@ -102,6 +102,6 @@ fn test_create_page() {
             ],
         };
 
-        assert_eq!(p.has_space(&tuple), true);
+        assert_eq!(p.has_space(&tuple).unwrap(), true);
     }
 }

@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, num::TryFromIntError};
 
 use crate::util::type_converter::{int_to_bytes, string_to_bytes};
 
@@ -15,6 +15,22 @@ pub struct Tuple<'a> {
 }
 
 pub type VarcharLength = u16;
+
+#[derive(Debug)]
+pub enum TypeConversionError {
+    IntConversionError(TryFromIntError),
+}
+
+#[derive(Debug)]
+pub enum TupleToDataError {
+    TypeConversionError(TypeConversionError),
+}
+
+impl <'a> From<TryFromIntError> for TupleToDataError {
+    fn from(err: TryFromIntError) -> TupleToDataError {
+        TupleToDataError::TypeConversionError(TypeConversionError::IntConversionError(err))
+    }
+}
 
 impl<'a> Tuple<'a> {
     pub fn read(types: &'a[&str], data: &[u8]) -> Tuple<'a> {
@@ -52,22 +68,23 @@ impl<'a> Tuple<'a> {
         }
     }
 
-    pub fn to_data(&self) -> Vec<u8> {
+    pub fn to_data(&self) -> Result<Vec<u8>, TupleToDataError> {
         let mut new_tuple: Vec<u8> = Vec::new();
         for v in self.values.iter() {
             let bytes: &[u8] = match v {
                 TupleValue::Integer(i) => &int_to_bytes(i),
                 TupleValue::Varchar(i) => {
-                    let len = i.len() as VarcharLength;
+                    let string_bytes = string_to_bytes(i);
+                    let len: VarcharLength = string_bytes.len().try_into()?;
 
-                    &[len.to_be_bytes().as_slice(), string_to_bytes(i)].concat()
+                    &[len.to_be_bytes().as_slice(), string_bytes].concat()
                 },
             };
 
             new_tuple.extend_from_slice(bytes);
         }
 
-        new_tuple
+        Ok(new_tuple)
     }
 }
 

@@ -1,6 +1,7 @@
 mod util;
 mod tuple;
 mod page;
+mod persist;
 
 use page::Page;
 use tuple::{ Tuple, TupleValue };

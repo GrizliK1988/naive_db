@@ -1,7 +1,7 @@
 use std::mem;
-use crate::tuple::Tuple;
+use crate::tuple::{Tuple, TupleToDataError};
 
-const SIZE: usize = 1024 * 16;
+pub const SIZE: usize = 1024 * 8;
 
 // version + number of slots
 type Header = (u16, u16);
@@ -67,12 +67,28 @@ impl<'a> Page {
         }
     }
 
-    pub fn has_space(&self, tuple: &Tuple) -> bool {
-        return tuple.to_data().len() <= self.free_space - SLOT_SIZE;
+    pub fn from_data(data: [u8; SIZE]) -> Page {
+        let slots = u16::from_be_bytes([data[2], data[3]]) as usize;
+        let data_size = data[HEADER_SIZE..]
+            .chunks(SLOT_SIZE)
+            .take(slots)
+            .fold(0, | acc, s | acc + Slot::read(s).length());
+
+        Page {
+            data: Box::new(data),
+            free_space: SIZE - HEADER_SIZE - slots * SLOT_SIZE - data_size,
+            slots,
+        }
     }
 
-    pub fn write(&mut self, tuple: &Tuple) -> Slot {
-        let tuple_data = tuple.to_data();
+    pub fn has_space(&self, tuple: &Tuple) -> Result<bool, TupleToDataError> {
+        let tuple_data = tuple.to_data()?;
+
+        Ok(tuple_data.len() + SLOT_SIZE <= self.free_space)
+    }
+
+    pub fn write(&mut self, tuple: &Tuple) -> Result<Slot, TupleToDataError> {
+        let tuple_data = tuple.to_data()?;
 
         if tuple_data.len() > TupleLength::MAX as usize {
             panic!("Can't write a tuple - too big. Overflow pages are not ready");
@@ -94,9 +110,9 @@ impl<'a> Page {
 
         self.data[2..4].copy_from_slice(&(self.slots as u16).to_be_bytes());
         self.data[slot_start..slot_start+slot_data.len()].copy_from_slice(&slot_data);
-        self.data[data_start-tuple_data.len()..data_start].copy_from_slice(&tuple.to_data());
+        self.data[data_start-tuple_data.len()..data_start].copy_from_slice(&tuple_data);
 
-        slot
+        Ok(slot)
     }
 
     pub fn read(&'a self, slot_id: SlotId, types: &'a[&str]) -> Result<Tuple<'a>, &'a str> {
