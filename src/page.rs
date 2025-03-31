@@ -136,4 +136,20 @@ impl<'a> Page {
             None => Err("Cannot read tuple"),
         }
     }
+
+    pub fn read_iterator(&'a self) -> impl Iterator<Item = impl Fn(&'a [&str]) -> Tuple<'a>> {
+        let mut data_offset = 0;
+        let data_length = self.data.len();
+
+        self.data[HEADER_SIZE..]
+            .chunks(SLOT_SIZE)
+            .take(self.slots)
+            .map(move | slot_data | {
+                let slot = Slot::read(slot_data);
+
+                data_offset += slot.length();
+
+                move | types: &'a [&str] | Tuple::read(&types, &self.data[data_length-data_offset..data_length-data_offset+slot.length()])
+            })
+    }
 }

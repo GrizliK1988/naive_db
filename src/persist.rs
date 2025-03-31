@@ -39,33 +39,32 @@ impl Writer {
 }
 
 pub struct Reader {
-    path: PathBuf,
+    file: File,
 }
 
 impl Reader {
     pub fn new (path: &str, filename: &str) -> Reader {
         Reader {
-            path: Path::new(path).join(filename),
+            file: OpenOptions::new()
+                .read(true)
+                .open(Path::new(path).join(filename))
+                .expect("Cannot open a file for reading")
         }
     }
 
-    pub fn read_page(&self, page_id: u64) -> Result<Page, Error> {
-        let mut file = self.open_read_file()?;
+    pub fn page_count(&self) -> u64 {
+        self.file.metadata().unwrap().len() / (SIZE as u64)
+    }
 
-        file.seek(std::io::SeekFrom::Start(page_id * (SIZE as u64)))?;
+    pub fn read_page(&mut self, page_id: u64) -> Result<Page, Error> {
+        self.file.seek(std::io::SeekFrom::Start(page_id * (SIZE as u64)))?;
 
-        let mut buf_reader = BufReader::with_capacity(READ_BUFFER_SIZE, file);
+        let mut buf_reader = BufReader::with_capacity(READ_BUFFER_SIZE, &self.file);
 
         let mut page_data = [0u8; SIZE];
 
         buf_reader.read_exact(&mut page_data)?;
 
         Ok(Page::from_data(page_data))
-    }
-
-    fn open_read_file(&self) -> Result<File, Error> {
-        OpenOptions::new()
-            .read(true)
-            .open(&self.path)
     }
 }

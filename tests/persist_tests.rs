@@ -48,12 +48,14 @@ fn test_persist_single_page() {
 
     println!("Page prepared. Slots: {}. Spare space: {}", p.slots, p.free_space);
 
-    fs::remove_file("./01_single_page").unwrap();
+    match fs::remove_file("./01_single_page") {
+        _ => {}
+    };
 
     let writer = Writer::new(".", "01_single_page");
     writer.insert_page(&p).unwrap();
 
-    let reader = Reader::new(".", "01_single_page");
+    let mut reader = Reader::new(".", "01_single_page");
     let read_page = reader.read_page(0).unwrap();
 
     assert_eq!(p.data, read_page.data);
