@@ -25,7 +25,7 @@ use fake::{ faker::name::en::Name, faker::internet::en::FreeEmail, rand::random,
 
 #[test]
 fn test_persist_single_page() {
-    let mut p = Page::new();
+    let mut p = Page::new(0);
 
     for _ in 0..10000 {
         let mut name: String = Name().fake();

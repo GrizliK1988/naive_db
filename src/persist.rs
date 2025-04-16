@@ -1,4 +1,5 @@
 use std::io::{BufReader, BufWriter, Error, Read, Seek, Write};
+use std::os::unix::fs::FileExt;
 use std::path::{ Path, PathBuf };
 use std::fs::{ File, OpenOptions };
 use crate::page::{Page, SIZE};
@@ -40,15 +41,24 @@ impl Writer {
 
 pub struct Reader {
     file: File,
+    buf_reader: BufReader<File>,
 }
 
 impl Reader {
     pub fn new (path: &str, filename: &str) -> Reader {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(Path::new(path).join(filename))
+            .expect("Cannot open a file for reading");
+
+        let file2 = OpenOptions::new()
+            .read(true)
+            .open(Path::new(path).join(filename))
+            .expect("Cannot open a file for reading");
+
         Reader {
-            file: OpenOptions::new()
-                .read(true)
-                .open(Path::new(path).join(filename))
-                .expect("Cannot open a file for reading")
+            file,
+            buf_reader: BufReader::new(file2),
         }
     }
 
@@ -57,14 +67,36 @@ impl Reader {
     }
 
     pub fn read_page(&mut self, page_id: u64) -> Result<Page, Error> {
-        self.file.seek(std::io::SeekFrom::Start(page_id * (SIZE as u64)))?;
-
-        let mut buf_reader = BufReader::with_capacity(READ_BUFFER_SIZE, &self.file);
-
         let mut page_data = [0u8; SIZE];
 
-        buf_reader.read_exact(&mut page_data)?;
+        self.file.read_exact_at(&mut page_data, page_id * (SIZE as u64))?;
 
-        Ok(Page::from_data(page_data))
+        Ok(Page::from_data(page_id, page_data))
+    }
+
+    pub fn seek_to_page(&mut self, page_id: u64) -> Result<bool, Error> {
+        self.buf_reader.seek(std::io::SeekFrom::Start(page_id * (SIZE as u64)))?;
+
+        Ok(true)
+    }
+
+    pub fn read_page_sequentially(&mut self, page_id: u64) -> Result<Vec<Page>, Error> {
+        let mut page_data = [0u8; 4 * SIZE];
+
+        self.buf_reader.read(&mut page_data)?;
+
+        let mut pid = page_id;
+
+        Ok(page_data
+            .chunks(SIZE)
+            .map(| data | {
+                let p = Page::from_data(pid, data.try_into().unwrap());
+
+                pid += 1;
+
+                p
+            })
+            .collect::<Vec<Page>>()
+        )
     }
 }

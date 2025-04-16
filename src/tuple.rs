@@ -35,7 +35,7 @@ impl <'a> From<TryFromIntError> for TupleToDataError {
 impl<'a> Tuple<'a> {
     pub fn read(types: &'a[&str], data: &[u8]) -> Tuple<'a> {
         let mut current_offset = 0;
-        let mut values = Vec::new();
+        let mut values = Vec::with_capacity(types.len());
 
         for &t in types {
             let value = match t {
@@ -54,7 +54,9 @@ impl<'a> Tuple<'a> {
 
                     current_offset += bytes.len() + std::mem::size_of::<VarcharLength>();
 
-                    TupleValue::Varchar(String::from_utf8(bytes).unwrap())
+                    unsafe {
+                        TupleValue::Varchar(String::from_utf8_unchecked(bytes))
+                    }
                 },
                 _ => panic!("Unsupported type {}", t),
             };

@@ -17,7 +17,7 @@ use tuple::{Tuple, TupleValue};
 
 #[test]
 fn test_create_page() {
-    let mut p = Page::new();
+    let mut p = Page::new(1);
 
     assert_eq!(p.slots, 0);
     assert_eq!(p.free_space, 1024 * 8 - 4);

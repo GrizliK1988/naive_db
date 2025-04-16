@@ -1,5 +1,5 @@
 use std::mem;
-use crate::tuple::{Tuple, TupleToDataError};
+use crate::tuple::{Tuple, TupleToDataError, TupleValue};
 
 pub const SIZE: usize = 1024 * 8;
 
@@ -7,6 +7,7 @@ pub const SIZE: usize = 1024 * 8;
 type Header = (u16, u16);
 const HEADER_SIZE: usize = mem::size_of::<Header>();
 
+pub type PageId = u64;
 type SlotId = u16;
 type TupleLength = u16;
 
@@ -48,26 +49,28 @@ impl Slot {
 }
 
 pub struct Page {
+    pub id: PageId,
     pub data: Box<[u8; SIZE]>,
     pub free_space: usize,
     pub slots: usize,
 }
 
 impl<'a> Page {
-    pub fn new() -> Page {
+    pub fn new(page_id: PageId) -> Page {
         let mut data: [u8; SIZE] = [Default::default(); SIZE];
 
         data[0..2].copy_from_slice(&[0, 1]);
         data[2..4].copy_from_slice(&[0, 0]);
 
         Page {
+            id: page_id,
             data: Box::new(data),
             free_space: SIZE - HEADER_SIZE,
             slots: 0,
         }
     }
 
-    pub fn from_data(data: [u8; SIZE]) -> Page {
+    pub fn from_data(page_id: PageId, data: [u8; SIZE]) -> Page {
         let slots = u16::from_be_bytes([data[2], data[3]]) as usize;
         let data_size = data[HEADER_SIZE..]
             .chunks(SLOT_SIZE)
@@ -75,6 +78,7 @@ impl<'a> Page {
             .fold(0, | acc, s | acc + Slot::read(s).length());
 
         Page {
+            id: page_id,
             data: Box::new(data),
             free_space: SIZE - HEADER_SIZE - slots * SLOT_SIZE - data_size,
             slots,
