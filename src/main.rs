@@ -3,6 +3,7 @@ mod tuple;
 mod page;
 mod persist;
 mod buffer_pool;
+mod hash_map;
 
 use buffer_pool::BufferPool;
 use page::Page;
