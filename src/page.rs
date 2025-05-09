@@ -48,6 +48,7 @@ impl Slot {
     }
 }
 
+#[derive(Debug)]
 pub struct Page {
     pub id: PageId,
     pub data: Box<[u8; SIZE]>,

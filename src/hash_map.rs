@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::{cell::UnsafeCell, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, RwLock, RwLockWriteGuard}};
 
 use twox_hash::XxHash3_64;
 
 use crate::page::{Page, PageId};
 
-#[derive(Clone, Default)]
-struct KeyOrThumbstone {
+#[derive(Debug)]
+pub struct KeyOrThumbstone {
     page_id: PageId,
     page_index: usize,
     is_thumbstone: bool,
@@ -17,105 +17,121 @@ impl KeyOrThumbstone {
     }
 }
 
+#[derive(Debug)]
 pub struct LinearPageHashMap {
     size: usize,
-    free_slots: usize,
-    page_keys: Vec<Option<KeyOrThumbstone>>,
-    pages: Vec<Arc<Page>>
+    free_slots: AtomicUsize,
+    pub page_keys: Vec<RwLock<Option<KeyOrThumbstone>>>,
+    pub pages: UnsafeCell<Vec<Option<Page>>>
 }
+
+unsafe impl Sync for LinearPageHashMap {}
 
 impl LinearPageHashMap {
     pub fn new(size: usize) -> Self {
         Self {
             size,
-            free_slots: size,
-            page_keys: vec![Default::default(); size * 2],
-            pages: Vec::with_capacity(size),
+            free_slots: AtomicUsize::new(size),
+            page_keys: (0..size*2).into_iter().map(|_| RwLock::new(None)).collect(),
+            pages: UnsafeCell::new((0..size).into_iter().map(|_| None).collect()),
         }
     }
 
-    pub fn insert(&mut self, page: Page) -> Result<(), ()> {
-        if self.free_slots == 0 {
+    pub fn insert<'a>(&'a self, page: Page) -> Result<(), ()> {
+        if self.free_slots.load(Ordering::Relaxed) == 0 {
             return Err(())
         }
 
         let hash = XxHash3_64::oneshot(&page.id.to_be_bytes()) as usize;
         let key = hash % self.size;
 
-        let page_id = page.id;
-
         let mut k = key;
         let keys_size = self.size * 2;
 
-        'main_loop: loop {
+        let mut page_key_write: Option<RwLockWriteGuard<'a, Option<KeyOrThumbstone>>> = None;
+
+        let result = 'main_loop: loop {
             let k_idx = k % keys_size;
 
-            match &self.page_keys[k_idx] {
-                Some(existing_key) => {
-                    if existing_key.is_thumbstone || existing_key.page_id == page_id {
-                        self.pages[existing_key.page_index] = Arc::new(page);
-                        self.free_slots -= 1;
+            let can_write: (bool, Option<usize>) = {
+                let page_key_read = &*self.page_keys[k_idx].read().unwrap();
 
-                        self.page_keys[k_idx] = Some(KeyOrThumbstone {
-                            page_id,
-                            is_thumbstone: false,
-                            page_index: existing_key.page_index,
-                        });
-                        break 'main_loop Ok(())
+                match page_key_read {
+                    Some(existing_key) => {
+                        if existing_key.is_thumbstone || &existing_key.page_id == &page.id {
+                            (true, Some(existing_key.page_index))
+                        } else {
+                            (false, None)
+                        }
+                    },
+                    None => {
+                        (true, None)
                     }
-
-                    k += 1;
-
-                    if k == key + keys_size {
-                        break 'main_loop Err(())
-                    }
-                },
-                None => {
-                    self.pages.push(Arc::new(page));
-                    self.free_slots -= 1;
-
-                    self.page_keys[k_idx] = Some(KeyOrThumbstone {
-                        page_id,
-                        is_thumbstone: false,
-                        page_index: self.pages.len() - 1,
-                    });
-                    break 'main_loop Ok(())
                 }
             };
+
+            match can_write {
+                (true, page_index) => {
+                    match self.prepare_store_page(page.id, k_idx, &mut page_key_write) {
+                        Ok(_) => break 'main_loop Ok(page_index),
+                        Err(_) => {},
+                    };
+                },
+                (false, _) => {}
+            };
+
+            k += 1;
+
+            if k == key + keys_size {
+                break 'main_loop Err(())
+            }
+        };
+
+        match result {
+            Ok(page_index) => {
+                self.store_page(page_index, page, page_key_write.unwrap());
+                Ok(())
+            },
+            Err(()) => Err(())
         }
     }
 
-    pub fn delete(&mut self, page_id: &PageId) -> Result<(), ()> {
-        let hash = XxHash3_64::oneshot(&page_id.to_be_bytes()) as usize;
-        let key = hash % self.size;
+    fn prepare_store_page<'a>(&'a self, page_id: PageId, page_key_index: usize, page_write: &mut Option<RwLockWriteGuard<'a, Option<KeyOrThumbstone>>>) -> Result<(), ()> {
+        let page_key_write = self.page_keys[page_key_index].write().unwrap();
 
-        let mut k = key;
-        let keys_size = self.size * 2;
-
-        loop {
-            let page_key = self.page_keys[k % keys_size].as_mut();
-
-            match page_key {
-                Some(page_key) => {
-                    if &page_key.page_id == page_id {
-                        page_key.mark_thumbstone();
-                        self.free_slots += 1;
-
-                        break Ok(())
-                    }
-
-                    k += 1;
-
-                    if k == key + keys_size {
-                        break Err(())
-                    }
-                },
-                None => break Ok(()),
+        match &*page_key_write {
+            Some(page_key_write) if !page_key_write.is_thumbstone && page_key_write.page_id != page_id => Err(()),
+            _ => {
+                page_write.replace(page_key_write);
+                Ok(())
             }
         }
     }
 
-    pub fn get(&self, page_id: PageId) -> Option<Arc<Page>> {
+    fn store_page<'a>(&self, page_index: Option<usize>, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
+        let pages = unsafe {
+            &mut *self.pages.get()
+        };
+        let page_id = page.id;
+
+        let free_slots = self.free_slots.fetch_sub(1, Ordering::Relaxed);
+
+        let page_index = match page_index {
+            Some(page_index) => page_index,
+            None => {
+                self.size - free_slots
+            }
+        };
+
+        pages[page_index] = Some(page);
+        *page_key_write = Some(KeyOrThumbstone {
+            page_id,
+            is_thumbstone: false,
+            page_index,
+        });
+    }
+
+    pub fn delete(&self, page_id: &PageId) -> Result<(), ()> {
         let hash = XxHash3_64::oneshot(&page_id.to_be_bytes()) as usize;
         let key = hash % self.size;
 
@@ -123,14 +139,68 @@ impl LinearPageHashMap {
         let keys_size = self.size * 2;
 
         loop {
-            let page = self.page_keys[k % keys_size]
-                    .as_ref()
-                    .and_then(| page_key | {
+            let k_idx = k % keys_size;
+
+            let can_delete = {
+                let page_key_read = &*self.page_keys[k_idx].read().unwrap();
+                match page_key_read {
+                    Some(page_key) => {
+                        if &page_key.page_id == page_id {
+                            Ok((true, true))
+                        } else {
+                            k += 1;
+    
+                            if k == key + keys_size {
+                                Err(())
+                            } else {
+                                Ok((false, false))
+                            }
+                        }
+                    },
+                    None => Ok((false, true)),
+                }
+            };
+
+            match can_delete {
+                Ok((true, _)) => {
+                    let mut page_key_write = self.page_keys[k_idx].write().unwrap();
+                    (*page_key_write).as_mut().unwrap().mark_thumbstone();
+
+                    self.free_slots.fetch_add(1, Ordering::Relaxed);
+
+                    break Ok(())
+                },
+                Ok((false, true)) => break Ok(()),
+                Ok((false, false)) => {},
+                Err(()) => break Err(()),
+            };
+        }
+    }
+
+    pub fn get(&self, page_id: PageId) -> Option<&Page> {
+        let hash = XxHash3_64::oneshot(&page_id.to_be_bytes()) as usize;
+        let key = hash % self.size;
+
+        let mut k = key;
+        let keys_size = self.size * 2;
+
+        let pages = unsafe {
+            &mut *self.pages.get()
+        };
+
+        loop {
+            let page = {
+                let page_key_read = self.page_keys[k % keys_size].read().unwrap();
+                match &*page_key_read {
+                    Some(page_key) => {
                         match page_key.is_thumbstone {
                             true => None,
-                            false => Some(self.pages[page_key.page_index].clone()),
+                            false => (&pages[page_key.page_index]).as_ref()
                         }
-                    });
+                    },
+                    None => None,
+                }
+            };
 
             match page {
                 Some(page) => {
