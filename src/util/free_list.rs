@@ -1,3 +1,5 @@
+use std::{ptr::NonNull, sync::atomic::{AtomicPtr, Ordering}};
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct FreeList {
     pub value: Option<usize>,
@@ -51,5 +53,111 @@ impl FreeList {
         }
 
         released_value
+    }
+}
+
+#[derive(Debug)]
+pub struct ConcurrentFreeList {
+    pub value: Option<usize>,
+    pub next: AtomicPtr<ConcurrentFreeList>
+}
+
+impl ConcurrentFreeList {
+    pub fn new(elements: Vec<usize>) -> Self {
+        elements
+            .iter()
+            .rev()
+            .fold(
+                Self {
+                    value: None,
+                    next: AtomicPtr::new(std::ptr::null_mut())
+                },
+                | acc, &element | {
+                    match NonNull::new(acc.next.load(Ordering::Relaxed)) {
+                        Some(next) => {
+                            let slot = Box::into_raw(Box::new(Self {
+                                value: Some(element),
+                                next: AtomicPtr::new(next.as_ptr())
+                            }));
+
+                            acc.next.store(slot, Ordering::Relaxed);
+
+                            acc
+                        },
+                        None => {
+                            let slot = Box::into_raw(Box::new(Self {
+                                value: Some(element),
+                                next: AtomicPtr::new(std::ptr::null_mut())
+                            }));
+
+                            acc.next.store(slot, Ordering::Relaxed);
+
+                            acc
+                        }
+                    }
+                }
+            )
+    }
+
+    pub fn allocate(&self) -> Result<usize, ()> {
+        let mut i = 0;
+
+        loop {
+            let next = NonNull::new(self.next.load(Ordering::Acquire));
+
+            if let None = next {
+                return Err(())
+            }
+
+            let next = next.unwrap();
+
+            let next_ptr = next.as_ptr();
+            let new_next_ptr = unsafe { next.as_ref() }.next.load(Ordering::Acquire);
+
+            match self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(next_ptr) => {
+                    let next = unsafe { &*next_ptr };
+
+                    return Ok(next.value.unwrap())
+                },
+                Err(_) => {
+                }
+            }
+
+            i+=1;
+            if i > 100 {
+                return Err(())
+            }
+            
+            std::hint::spin_loop();
+        }
+    }
+
+    pub fn deallocate(&self, element: &usize) -> Result<(), ()> {
+        let mut i = 0;
+
+        loop {
+            let next_ptr = self.next.load(Ordering::Acquire);
+
+            let new_next = Box::into_raw(Box::new(Self {
+                value: Some(element.to_owned()),
+                next: AtomicPtr::new(next_ptr.clone()),
+            }));
+
+            match self.next.compare_exchange(next_ptr, new_next, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => {
+                    return Ok(())
+                },
+                Err(_) => {
+                }
+            }
+
+            i+=1;
+            if i > 100 {
+                return Err(())
+            }
+            
+            std::hint::spin_loop();
+        }
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, ops::Deref, sync::Arc, thread::Scope};
+use std::{collections::VecDeque, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}, thread::Scope};
 
 use hash_map::LinearPageHashMap;
 use page::{Page, PageId};
@@ -6,6 +6,10 @@ use page::{Page, PageId};
 mod util {
     pub mod type_converter {
         include!("../src/util/type_converter.rs");
+    }
+
+    pub mod free_list {
+        include!("../src/util/free_list.rs");
     }
 }
 
@@ -65,11 +69,17 @@ fn test_conflicting_inserts_with_deletes() {
         }
 
         m.delete(&53).unwrap();
-        m.insert(Page::new(ids.pop_front().unwrap())).unwrap();
+
+        let p = Page::new(12);
+        m.insert(p).unwrap();
     }
 
     assert_eq!(m.get(31).unwrap().id, 31);
     assert_eq!(m.get(44).unwrap().id, 44);
+    assert_eq!(m.get(12).unwrap().id, 12);
+    assert_eq!(m.get(78).unwrap().id, 78);
+    assert_eq!(m.get(87).unwrap().id, 87);
+
     assert_eq!(m.get(5).is_none(), true);
 }
 
@@ -95,7 +105,7 @@ fn test_delete() {
 
 #[test]
 fn test_insert_multithread_simple() {
-    for n in 0..1000 {
+    for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
         let m = LinearPageHashMap::new(5);
     
@@ -110,20 +120,46 @@ fn test_insert_multithread_simple() {
         });
     
         for id in [31, 44, 53, 78, 87] {
-            println!("page id {}", id);
+            assert_eq!(id, m.get(id).unwrap().id);
+        }
+    }
+}
+
+#[test]
+fn test_insert_multithread_simple_with_deletes() {
+    for _ in 0..1000 {
+        let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
+        let m = LinearPageHashMap::new(5);
     
-            match m.get(id) {
-                Some(p) => assert_eq!(id, p.id),
-                None => {
-                    println!("page id {} not found", id);
-                    for k in &m.page_keys {
-                        let k = &*(k.read().unwrap());
-                        println!("key {:?}", k.as_ref().unwrap());
-                    }
-    
-                    // m.get(id);
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel::<u64>();
+
+            let mm = Arc::new(&m);
+            s.spawn(move || {
+                for i in rx {
+                    mm.delete(&i).unwrap();
                 }
+            });
+
+            for _ in 0..5 {
+                let id = ids.pop_front().unwrap();
+                let m = Arc::new(&m);
+                let tx = tx.clone();
+                s.spawn(move || {
+                    let _ = &m.insert(Page::new(id));
+
+                    if id == 44 || id == 78 {
+                        tx.send(id).unwrap();
+                    } 
+                });
             }
+        });
+
+        m.insert(Page::new(14)).unwrap();
+        m.insert(Page::new(77)).unwrap();
+    
+        for id in [31, /*44, */53, /*78, */87, 14, 77] {
+            assert_eq!(id, m.get(id).unwrap().id);
         }
     }
 }

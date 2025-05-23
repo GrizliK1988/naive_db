@@ -1,8 +1,8 @@
-use std::{cell::UnsafeCell, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, RwLock, RwLockWriteGuard}};
+use std::{cell::UnsafeCell, sync::{atomic::{AtomicUsize}, RwLock, RwLockWriteGuard}};
 
 use twox_hash::XxHash3_64;
 
-use crate::page::{Page, PageId};
+use crate::{page::{Page, PageId}, util::free_list::ConcurrentFreeList};
 
 #[derive(Debug)]
 pub struct KeyOrThumbstone {
@@ -20,9 +20,10 @@ impl KeyOrThumbstone {
 #[derive(Debug)]
 pub struct LinearPageHashMap {
     size: usize,
-    free_slots: AtomicUsize,
+    free_list: ConcurrentFreeList,
     pub page_keys: Vec<RwLock<Option<KeyOrThumbstone>>>,
-    pub pages: UnsafeCell<Vec<Option<Page>>>
+    pub pages: UnsafeCell<Vec<Option<Page>>>,
+    clock_page_index: AtomicUsize
 }
 
 unsafe impl Sync for LinearPageHashMap {}
@@ -31,16 +32,17 @@ impl LinearPageHashMap {
     pub fn new(size: usize) -> Self {
         Self {
             size,
-            free_slots: AtomicUsize::new(size),
+            free_list: ConcurrentFreeList::new((0..size).collect()),
             page_keys: (0..size*2).into_iter().map(|_| RwLock::new(None)).collect(),
             pages: UnsafeCell::new((0..size).into_iter().map(|_| None).collect()),
+            clock_page_index: AtomicUsize::new(0),
         }
     }
 
     pub fn insert<'a>(&'a self, page: Page) -> Result<(), ()> {
-        if self.free_slots.load(Ordering::Relaxed) == 0 {
+        let Ok(allocated_slot) = self.free_list.allocate() else {
             return Err(())
-        }
+        };
 
         let hash = XxHash3_64::oneshot(&page.id.to_be_bytes()) as usize;
         let key = hash % self.size;
@@ -53,32 +55,21 @@ impl LinearPageHashMap {
         let result = 'main_loop: loop {
             let k_idx = k % keys_size;
 
-            let can_write: (bool, Option<usize>) = {
+            let can_write: bool = {
                 let page_key_read = &*self.page_keys[k_idx].read().unwrap();
 
                 match page_key_read {
-                    Some(existing_key) => {
-                        if existing_key.is_thumbstone || &existing_key.page_id == &page.id {
-                            (true, Some(existing_key.page_index))
-                        } else {
-                            (false, None)
-                        }
-                    },
-                    None => {
-                        (true, None)
-                    }
+                    Some(existing_key) => existing_key.is_thumbstone || &existing_key.page_id == &page.id,
+                    None => true,
                 }
             };
 
-            match can_write {
-                (true, page_index) => {
-                    match self.prepare_store_page(page.id, k_idx, &mut page_key_write) {
-                        Ok(_) => break 'main_loop Ok(page_index),
-                        Err(_) => {},
-                    };
-                },
-                (false, _) => {}
-            };
+            if can_write {
+                match self.prepare_store_page(page.id, k_idx, &mut page_key_write) {
+                    Ok(_) => break 'main_loop Ok(()),
+                    Err(_) => {},
+                };
+            }
 
             k += 1;
 
@@ -88,11 +79,11 @@ impl LinearPageHashMap {
         };
 
         match result {
-            Ok(page_index) => {
-                self.store_page(page_index, page, page_key_write.unwrap());
+            Ok(_) => {
+                self.store_page(allocated_slot, page, page_key_write.unwrap());
                 Ok(())
             },
-            Err(()) => Err(())
+            Err(_) => Err(())
         }
     }
 
@@ -108,26 +99,17 @@ impl LinearPageHashMap {
         }
     }
 
-    fn store_page<'a>(&self, page_index: Option<usize>, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
+    fn store_page<'a>(&self, allocated_slot: usize, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
         let pages = unsafe {
             &mut *self.pages.get()
         };
         let page_id = page.id;
 
-        let free_slots = self.free_slots.fetch_sub(1, Ordering::Relaxed);
-
-        let page_index = match page_index {
-            Some(page_index) => page_index,
-            None => {
-                self.size - free_slots
-            }
-        };
-
-        pages[page_index] = Some(page);
+        pages[allocated_slot] = Some(page);
         *page_key_write = Some(KeyOrThumbstone {
             page_id,
             is_thumbstone: false,
-            page_index,
+            page_index: allocated_slot,
         });
     }
 
@@ -166,7 +148,8 @@ impl LinearPageHashMap {
                     let mut page_key_write = self.page_keys[k_idx].write().unwrap();
                     (*page_key_write).as_mut().unwrap().mark_thumbstone();
 
-                    self.free_slots.fetch_add(1, Ordering::Relaxed);
+                    let page_index = (*page_key_write).as_ref().unwrap().page_index;
+                    self.free_list.deallocate(&page_index)?;
 
                     break Ok(())
                 },
@@ -189,32 +172,26 @@ impl LinearPageHashMap {
         };
 
         loop {
-            let page = {
+            let page_index = {
                 let page_key_read = self.page_keys[k % keys_size].read().unwrap();
                 match &*page_key_read {
-                    Some(page_key) => {
-                        match page_key.is_thumbstone {
-                            true => None,
-                            false => (&pages[page_key.page_index]).as_ref()
+                    Some(page_key) if !page_key.is_thumbstone && page_key.page_id == page_id => page_key.page_index,
+                    Some(page_key) if page_key.is_thumbstone || page_key.page_id != page_id => {
+                        k += 1;
+
+                        if k == key + keys_size {
+                            break None
                         }
+
+                        continue
                     },
-                    None => None,
+                    _ => break None,
                 }
             };
 
-            match page {
-                Some(page) => {
-                    if page.id == page_id {
-                        break Some(page)
-                    }
-
-                    k += 1;
-
-                    if k == key + keys_size {
-                        break None
-                    }
-                },
-                None => break None,
+            match (&pages[page_index]).as_ref() {
+                Some(page) if page.id == page_id => break Some(&page),
+                _ => break None,
             }
         }
     }
