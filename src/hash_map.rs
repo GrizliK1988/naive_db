@@ -18,24 +18,22 @@ impl KeyOrThumbstone {
 }
 
 #[derive(Debug)]
-pub struct LinearPageHashMap {
+pub struct LinearIndirectPageHashMap {
     size: usize,
     free_list: ConcurrentFreeList,
     pub page_keys: Vec<RwLock<Option<KeyOrThumbstone>>>,
-    pub pages: UnsafeCell<Vec<Option<Page>>>,
-    clock_page_index: AtomicUsize
+    pub pages: UnsafeCell<Vec<Option<Page>>>
 }
 
-unsafe impl Sync for LinearPageHashMap {}
+unsafe impl Sync for LinearIndirectPageHashMap {}
 
-impl LinearPageHashMap {
+impl LinearIndirectPageHashMap {
     pub fn new(size: usize) -> Self {
         Self {
             size,
             free_list: ConcurrentFreeList::new((0..size).collect()),
             page_keys: (0..size*2).into_iter().map(|_| RwLock::new(None)).collect(),
             pages: UnsafeCell::new((0..size).into_iter().map(|_| None).collect()),
-            clock_page_index: AtomicUsize::new(0),
         }
     }
 

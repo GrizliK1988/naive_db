@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}, thread::Scope};
 
-use hash_map::LinearPageHashMap;
+use hash_map::LinearIndirectPageHashMap;
 use page::{Page, PageId};
 
 mod util {
@@ -27,7 +27,7 @@ mod hash_map {
 
 #[test]
 fn test_simple() {
-    let mut m = LinearPageHashMap::new(100);
+    let mut m = LinearIndirectPageHashMap::new(100);
 
     {
         let p = Page::new(1);
@@ -45,7 +45,7 @@ fn test_simple() {
 
 #[test]
 fn test_conflicting_inserts_with_deletes() {
-    let mut m = LinearPageHashMap::new(5);
+    let mut m = LinearIndirectPageHashMap::new(5);
     let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
 
     {
@@ -85,7 +85,7 @@ fn test_conflicting_inserts_with_deletes() {
 
 #[test]
 fn test_delete() {
-    let mut m = LinearPageHashMap::new(5);
+    let mut m = LinearIndirectPageHashMap::new(5);
 
     {
         m.insert(Page::new(31)).unwrap();
@@ -107,7 +107,7 @@ fn test_delete() {
 fn test_insert_multithread_simple() {
     for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
-        let m = LinearPageHashMap::new(5);
+        let m = LinearIndirectPageHashMap::new(5);
     
         std::thread::scope(|s| {
             for _ in 0..5 {
@@ -129,7 +129,7 @@ fn test_insert_multithread_simple() {
 fn test_insert_multithread_simple_with_deletes() {
     for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
-        let m = LinearPageHashMap::new(5);
+        let m = LinearIndirectPageHashMap::new(5);
     
         std::thread::scope(|s| {
             let (tx, rx) = std::sync::mpsc::channel::<u64>();

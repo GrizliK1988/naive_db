@@ -1,15 +1,15 @@
-use crate::{hash_map::LinearPageHashMap, page::{Page, PageId}};
+use crate::{hash_map::LinearIndirectPageHashMap, page::{Page, PageId}};
 
 pub struct BufferPool {
     size: usize,
-    pub page_map: LinearPageHashMap,
+    pub page_map: LinearIndirectPageHashMap,
 }
 
 impl BufferPool {
   pub fn new(size: usize) -> BufferPool {
     BufferPool {
       size,
-      page_map: LinearPageHashMap::new(size),
+      page_map: LinearIndirectPageHashMap::new(size),
     } 
   }
 
