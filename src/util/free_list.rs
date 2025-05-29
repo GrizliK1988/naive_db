@@ -64,79 +64,53 @@ pub struct ConcurrentFreeList {
 
 impl ConcurrentFreeList {
     pub fn new(elements: Vec<usize>) -> Self {
-        elements
-            .iter()
-            .rev()
-            .fold(
-                Self {
-                    value: None,
-                    next: AtomicPtr::new(std::ptr::null_mut())
-                },
-                | acc, &element | {
-                    match NonNull::new(acc.next.load(Ordering::Relaxed)) {
-                        Some(next) => {
-                            let slot = Box::into_raw(Box::new(Self {
-                                value: Some(element),
-                                next: AtomicPtr::new(next.as_ptr())
-                            }));
+        let Some(last_element) = elements.last() else {
+            return Self {
+                value: None,
+                next: AtomicPtr::new(std::ptr::null_mut())
+            };
+        };
 
-                            acc.next.store(slot, Ordering::Relaxed);
+        let mut prev_slot = Box::into_raw(Box::new(Self {
+            value: Some(*last_element),
+            next: AtomicPtr::new(std::ptr::null_mut())
+        }));
+        for element in elements.iter().rev().skip(1) {
+            let slot = Box::into_raw(Box::new(Self {
+                value: Some(*element),
+                next: AtomicPtr::new(prev_slot)
+            }));
 
-                            acc
-                        },
-                        None => {
-                            let slot = Box::into_raw(Box::new(Self {
-                                value: Some(element),
-                                next: AtomicPtr::new(std::ptr::null_mut())
-                            }));
+            prev_slot = slot;
+        }
 
-                            acc.next.store(slot, Ordering::Relaxed);
-
-                            acc
-                        }
-                    }
-                }
-            )
+        Self {
+            value: None,
+            next: AtomicPtr::new(prev_slot)
+        }
     }
 
     pub fn allocate(&self) -> Result<usize, ()> {
-        let mut i = 0;
-
-        loop {
-            let next = NonNull::new(self.next.load(Ordering::Acquire));
-
-            if let None = next {
+        for _ in 0..100 {
+            let Some(next) = NonNull::new(self.next.load(Ordering::Acquire)) else {
                 return Err(())
-            }
-
-            let next = next.unwrap();
+            };
 
             let next_ptr = next.as_ptr();
             let new_next_ptr = unsafe { next.as_ref() }.next.load(Ordering::Acquire);
 
-            match self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::AcqRel, Ordering::Relaxed) {
-                Ok(next_ptr) => {
-                    let next = unsafe { &*next_ptr };
+            if let Ok(next_ptr) = self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::Release, Ordering::Relaxed) {
+                let next = unsafe { &*next_ptr };
 
-                    return Ok(next.value.unwrap())
-                },
-                Err(_) => {
-                }
+                return Ok(next.value.unwrap())
             }
-
-            i+=1;
-            if i > 100 {
-                return Err(())
-            }
-            
-            std::hint::spin_loop();
         }
+
+        Err(())
     }
 
     pub fn deallocate(&self, element: &usize) -> Result<(), ()> {
-        let mut i = 0;
-
-        loop {
+        for _ in 0..100 {
             let next_ptr = self.next.load(Ordering::Acquire);
 
             let new_next = Box::into_raw(Box::new(Self {
@@ -144,20 +118,11 @@ impl ConcurrentFreeList {
                 next: AtomicPtr::new(next_ptr.clone()),
             }));
 
-            match self.next.compare_exchange(next_ptr, new_next, Ordering::AcqRel, Ordering::Relaxed) {
-                Ok(_) => {
-                    return Ok(())
-                },
-                Err(_) => {
-                }
+            if let Ok(_) = self.next.compare_exchange(next_ptr, new_next, Ordering::Release, Ordering::Relaxed) {
+                return Ok(())
             }
-
-            i+=1;
-            if i > 100 {
-                return Err(())
-            }
-            
-            std::hint::spin_loop();
         }
+
+        Err(())
     }
 }

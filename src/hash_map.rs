@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, sync::{atomic::{AtomicUsize}, RwLock, RwLockWriteGuard}};
+use std::{cell::UnsafeCell, sync::{atomic::AtomicUsize, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard}};
 
 use twox_hash::XxHash3_64;
 
@@ -22,7 +22,7 @@ pub struct LinearIndirectPageHashMap {
     size: usize,
     free_list: ConcurrentFreeList,
     pub page_keys: Vec<RwLock<Option<KeyOrThumbstone>>>,
-    pub pages: UnsafeCell<Vec<Option<Page>>>
+    pub pages: Vec<RwLock<Option<Page>>>
 }
 
 unsafe impl Sync for LinearIndirectPageHashMap {}
@@ -33,13 +33,13 @@ impl LinearIndirectPageHashMap {
             size,
             free_list: ConcurrentFreeList::new((0..size).collect()),
             page_keys: (0..size*2).into_iter().map(|_| RwLock::new(None)).collect(),
-            pages: UnsafeCell::new((0..size).into_iter().map(|_| None).collect()),
+            pages: (0..size).into_iter().map(|_| RwLock::new(None)).collect(),
         }
     }
 
-    pub fn insert<'a>(&'a self, page: Page) -> Result<(), ()> {
+    pub fn insert<'a>(&'a self, page: Page) -> Result<(), Page> {
         let Ok(allocated_slot) = self.free_list.allocate() else {
-            return Err(())
+            return Err(page)
         };
 
         let hash = XxHash3_64::oneshot(&page.id.to_be_bytes()) as usize;
@@ -81,7 +81,7 @@ impl LinearIndirectPageHashMap {
                 self.store_page(allocated_slot, page, page_key_write.unwrap());
                 Ok(())
             },
-            Err(_) => Err(())
+            Err(_) => Err(page)
         }
     }
 
@@ -98,12 +98,11 @@ impl LinearIndirectPageHashMap {
     }
 
     fn store_page<'a>(&self, allocated_slot: usize, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
-        let pages = unsafe {
-            &mut *self.pages.get()
-        };
         let page_id = page.id;
 
-        pages[allocated_slot] = Some(page);
+        let mut page_write = self.pages[allocated_slot].write().unwrap();
+        *page_write = Some(page);
+
         *page_key_write = Some(KeyOrThumbstone {
             page_id,
             is_thumbstone: false,
@@ -158,16 +157,19 @@ impl LinearIndirectPageHashMap {
         }
     }
 
-    pub fn get(&self, page_id: PageId) -> Option<&Page> {
+    pub fn delete_by_index(&self, page_index: usize) -> Result<(), ()> {
+        let page = self.pages[page_index].read().unwrap();
+        let page_id = (*page).as_ref().unwrap().id;
+
+        self.delete(&page_id)
+    }
+
+    pub fn get(&self, page_id: PageId) -> Option<(RwLockReadGuard<Option<Page>>, usize)> {
         let hash = XxHash3_64::oneshot(&page_id.to_be_bytes()) as usize;
         let key = hash % self.size;
 
         let mut k = key;
         let keys_size = self.size * 2;
-
-        let pages = unsafe {
-            &mut *self.pages.get()
-        };
 
         loop {
             let page_index = {
@@ -187,8 +189,10 @@ impl LinearIndirectPageHashMap {
                 }
             };
 
-            match (&pages[page_index]).as_ref() {
-                Some(page) if page.id == page_id => break Some(&page),
+            let page_guard = self.pages[page_index].read().unwrap();
+
+            match (&*page_guard).as_ref() {
+                Some(page) if page.id == page_id => break Some((page_guard, page_index)),
                 _ => break None,
             }
         }

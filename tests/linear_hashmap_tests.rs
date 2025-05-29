@@ -39,8 +39,8 @@ fn test_simple() {
         m.insert(p).unwrap();
     }
 
-    assert_eq!(m.get(1).unwrap().id, 1);
-    assert_eq!(m.get(2).unwrap().id, 2);
+    assert_eq!(m.get(1).unwrap().0.as_ref().unwrap().id, 1);
+    assert_eq!(m.get(2).unwrap().0.as_ref().unwrap().id, 2);
 }
 
 #[test]
@@ -60,12 +60,12 @@ fn test_conflicting_inserts_with_deletes() {
 
         let p = Page::new(ids.pop_front().unwrap());
         let result = m.insert(p);
-        assert_eq!(result, Err(()));
+        assert_eq!(true, result.is_err());
 
         for _ in 0..5 {
             let id = inserted_ids.pop_front().unwrap();
             let p = m.get(id).unwrap();
-            assert_eq!(id, p.id);
+            assert_eq!(id, p.0.as_ref().unwrap().id);
         }
 
         m.delete(&53).unwrap();
@@ -74,11 +74,11 @@ fn test_conflicting_inserts_with_deletes() {
         m.insert(p).unwrap();
     }
 
-    assert_eq!(m.get(31).unwrap().id, 31);
-    assert_eq!(m.get(44).unwrap().id, 44);
-    assert_eq!(m.get(12).unwrap().id, 12);
-    assert_eq!(m.get(78).unwrap().id, 78);
-    assert_eq!(m.get(87).unwrap().id, 87);
+    assert_eq!(m.get(31).unwrap().0.as_ref().unwrap().id, 31);
+    assert_eq!(m.get(44).unwrap().0.as_ref().unwrap().id, 44);
+    assert_eq!(m.get(12).unwrap().0.as_ref().unwrap().id, 12);
+    assert_eq!(m.get(78).unwrap().0.as_ref().unwrap().id, 78);
+    assert_eq!(m.get(87).unwrap().0.as_ref().unwrap().id, 87);
 
     assert_eq!(m.get(5).is_none(), true);
 }
@@ -89,7 +89,7 @@ fn test_delete() {
 
     {
         m.insert(Page::new(31)).unwrap();
-        assert_eq!(m.get(31).unwrap().id, 31);
+        assert_eq!(m.get(31).unwrap().0.as_ref().unwrap().id, 31);
     }
 
     {
@@ -99,7 +99,7 @@ fn test_delete() {
 
     {
         m.insert(Page::new(44)).unwrap();
-        assert_eq!(m.get(44).unwrap().id, 44);
+        assert_eq!(m.get(44).unwrap().0.as_ref().unwrap().id, 44);
     }
 }
 
@@ -120,7 +120,7 @@ fn test_insert_multithread_simple() {
         });
     
         for id in [31, 44, 53, 78, 87] {
-            assert_eq!(id, m.get(id).unwrap().id);
+            assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
         }
     }
 }
@@ -159,7 +159,7 @@ fn test_insert_multithread_simple_with_deletes() {
         m.insert(Page::new(77)).unwrap();
     
         for id in [31, /*44, */53, /*78, */87, 14, 77] {
-            assert_eq!(id, m.get(id).unwrap().id);
+            assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
         }
     }
 }
