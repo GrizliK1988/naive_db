@@ -23,23 +23,14 @@ impl BufferPool {
 
   pub fn get(&self, page_id: PageId) -> Option<RwLockReadGuard<Option<Page>>> {
     self.page_map.get(page_id).and_then(| (page, page_index) | {
-      let mut i = 0;
       let bitmap_cell = &self.read_indicator[page_index / BITMAP_CELL_SIZE];
       let mut bitmap_cell_value = bitmap_cell.load(Ordering::Relaxed);
-      loop {
+
+      for _ in 0..10 {
         let new_cell_value = bitmap_cell_value | (1 << (page_index % BITMAP_CELL_SIZE));
 
-        let result = bitmap_cell.compare_exchange(bitmap_cell_value, new_cell_value, Ordering::Acquire, Ordering::Relaxed);
-        match result {
-          Ok(_) => break,
-          Err(real_value) => {
+        if let Err(real_value) = bitmap_cell.compare_exchange(bitmap_cell_value, new_cell_value, Ordering::Acquire, Ordering::Relaxed) {
             bitmap_cell_value = real_value;
-
-            i += 1;
-            if i > 10 {
-              break;
-            }
-          }
         }
       }
 
@@ -48,37 +39,34 @@ impl BufferPool {
   }
 
   pub fn add(&self, page: Page) -> Result<(), Page> {
-    match self.page_map.insert(page) {
-        Ok(_) => Ok(()),
-        Err(failed_page) => {
-          let mut i = 0;
+    if let Err(mut page) = self.page_map.insert(page) {
+      for _ in 0..10 {
+        for _ in 0..5*self.size {
+          let clock_page_index = self.clock.fetch_add(1, Ordering::Relaxed);
+          let bitmap_cell = &self.read_indicator[clock_page_index / BITMAP_CELL_SIZE];
+          let bitmap_cell_value = bitmap_cell.load(Ordering::Relaxed);
+          let page_access_indicator = bitmap_cell_value | (1 << (clock_page_index % BITMAP_CELL_SIZE));
 
-          let remove_result = loop {
-              let clock_page_index = self.clock.fetch_add(1, Ordering::Relaxed);
-              let bitmap_cell = &self.read_indicator[clock_page_index / BITMAP_CELL_SIZE];
-              let bitmap_cell_value = bitmap_cell.load(Ordering::Relaxed);
-              let page_access_indicator = bitmap_cell_value | (1 << (clock_page_index % BITMAP_CELL_SIZE));
-
-              if (bitmap_cell_value & page_access_indicator) != page_access_indicator {
-                break self.page_map.delete_by_index(clock_page_index);
-              } else {
-                let new_bitmap_cell_value = bitmap_cell_value & !(1 << (clock_page_index % BITMAP_CELL_SIZE));
-                let _ = bitmap_cell.compare_exchange(bitmap_cell_value, new_bitmap_cell_value, Ordering::Acquire, Ordering::Relaxed);
-              }
-
-              i += 1;
-              if i > self.size * 5 {
-                break Err(());
-              }
-          };
-
-          if remove_result.is_ok() {
-            self.page_map.insert(failed_page)?;
-            Ok(())
+          if (bitmap_cell_value & page_access_indicator) != page_access_indicator {
+            let _ = self.page_map.delete_by_index(clock_page_index);
+            break;
           } else {
-            Err(failed_page)
+            let new_bitmap_cell_value = bitmap_cell_value & !(1 << (clock_page_index % BITMAP_CELL_SIZE));
+            let _ = bitmap_cell.compare_exchange(bitmap_cell_value, new_bitmap_cell_value, Ordering::Acquire, Ordering::Relaxed);
           }
         }
+
+        match self.page_map.insert(page) {
+          Ok(_) => return Ok(()),
+          Err(failed_page) => {
+            page = failed_page;
+          }
+        };
+      }
+
+      return Err(page);
+    } else {
+      return Ok(());
     }
   }
 }

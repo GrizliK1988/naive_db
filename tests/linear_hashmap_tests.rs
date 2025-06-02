@@ -126,6 +126,26 @@ fn test_insert_multithread_simple() {
 }
 
 #[test]
+fn test_insert_multithread_large() {
+    for _ in 0..10 {
+        let m = LinearIndirectPageHashMap::new(5000);
+    
+        std::thread::scope(|s| {
+            for id in 0..5000 {
+                let m = Arc::new(&m);
+                s.spawn(move || {
+                    let _ = &m.insert(Page::new(id));
+                });
+            }
+        });
+    
+        for id in 0..5000 {
+            assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
+        }
+    }
+}
+
+#[test]
 fn test_insert_multithread_simple_with_deletes() {
     for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
