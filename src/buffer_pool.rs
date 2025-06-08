@@ -4,15 +4,15 @@ use crate::{hash_map::LinearIndirectPageHashMap, page::{Page, PageId}};
 
 const BITMAP_CELL_SIZE: usize = 8;
 
-pub struct BufferPool {
-    pub page_map: LinearIndirectPageHashMap,
+pub struct BufferPool<'a> {
+    pub page_map: LinearIndirectPageHashMap<'a>,
     size: usize,
     clock: AtomicUsize,
     read_indicator: Vec<AtomicU8>,
 }
 
-impl BufferPool {
-  pub fn new(size: usize) -> BufferPool {
+impl<'a> BufferPool<'a> {
+  pub fn new(size: usize) -> BufferPool<'a> {
     BufferPool {
       size,
       page_map: LinearIndirectPageHashMap::new(size),
@@ -38,7 +38,7 @@ impl BufferPool {
     })
   }
 
-  pub fn add(&self, page: Page) -> Result<(), Page> {
+  pub fn add(&'a self, page: Page) -> Result<(), Page> {
     if let Err(mut page) = self.page_map.insert(page) {
       for _ in 0..10 {
         for _ in 0..5*self.size {

@@ -18,16 +18,16 @@ impl KeyOrThumbstone {
 }
 
 #[derive(Debug)]
-pub struct LinearIndirectPageHashMap {
+pub struct LinearIndirectPageHashMap<'a> {
     size: usize,
-    free_list: ConcurrentFreeList,
+    free_list: ConcurrentFreeList<'a>,
     pub page_keys: Vec<RwLock<Option<KeyOrThumbstone>>>,
     pub pages: Vec<RwLock<Option<Page>>>
 }
 
-unsafe impl Sync for LinearIndirectPageHashMap {}
+unsafe impl<'a> Sync for LinearIndirectPageHashMap<'a> {}
 
-impl LinearIndirectPageHashMap {
+impl<'a> LinearIndirectPageHashMap<'a> {
     pub fn new(size: usize) -> Self {
         Self {
             size,
@@ -37,7 +37,7 @@ impl LinearIndirectPageHashMap {
         }
     }
 
-    pub fn insert<'a>(&'a self, page: Page) -> Result<(), Page> {
+    pub fn insert(&'a self, page: Page) -> Result<(), Page> {
         let Ok(allocated_slot) = self.free_list.allocate() else {
             return Err(page)
         };
@@ -85,7 +85,7 @@ impl LinearIndirectPageHashMap {
         }
     }
 
-    fn prepare_store_page<'a>(&'a self, page_id: PageId, page_key_index: usize, page_write: &mut Option<RwLockWriteGuard<'a, Option<KeyOrThumbstone>>>) -> Result<(), ()> {
+    fn prepare_store_page(&'a self, page_id: PageId, page_key_index: usize, page_write: &mut Option<RwLockWriteGuard<'a, Option<KeyOrThumbstone>>>) -> Result<(), ()> {
         let page_key_write = self.page_keys[page_key_index].write().unwrap();
 
         match &*page_key_write {
@@ -97,7 +97,7 @@ impl LinearIndirectPageHashMap {
         }
     }
 
-    fn store_page<'a>(&self, allocated_slot: usize, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
+    fn store_page(&self, allocated_slot: usize, page: Page, mut page_key_write: RwLockWriteGuard<'a, Option<KeyOrThumbstone>>) {
         let page_id = page.id;
 
         let mut page_write = self.pages[allocated_slot].write().unwrap();

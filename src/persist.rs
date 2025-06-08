@@ -24,7 +24,7 @@ impl Writer {
         file.seek(std::io::SeekFrom::End(0))?;
 
         let mut buf_writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
-        buf_writer.write_all(&*page.data)?;
+        buf_writer.write_all(&page.data)?;
         buf_writer.flush()?;
 
         Ok(())

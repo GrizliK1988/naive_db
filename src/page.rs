@@ -51,7 +51,7 @@ impl Slot {
 #[derive(Debug)]
 pub struct Page {
     pub id: PageId,
-    pub data: Box<[u8; SIZE]>,
+    pub data: [u8; SIZE],
     pub free_space: usize,
     pub slots: usize,
 }
@@ -65,7 +65,7 @@ impl<'a> Page {
 
         Page {
             id: page_id,
-            data: Box::new(data),
+            data: data,
             free_space: SIZE - HEADER_SIZE,
             slots: 0,
         }
@@ -80,7 +80,7 @@ impl<'a> Page {
 
         Page {
             id: page_id,
-            data: Box::new(data),
+            data: data,
             free_space: SIZE - HEADER_SIZE - slots * SLOT_SIZE - data_size,
             slots,
         }
