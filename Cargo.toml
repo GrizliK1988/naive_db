@@ -8,5 +8,6 @@ dashmap = "6.1.0"
 fake="4.2"
 peak_alloc="0.2.1"
 twox-hash="2.1.0"
+parking_lot="0.12.4"
 
 [dev-dependencies]

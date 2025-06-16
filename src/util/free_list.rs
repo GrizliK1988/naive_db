@@ -1,6 +1,6 @@
-use std::{ops::Index, ptr::NonNull, sync::atomic::{AtomicPtr, Ordering}};
+use std::{cell::UnsafeCell, ptr::NonNull, sync::atomic::{AtomicPtr, Ordering}};
 
-use crate::page::{self, Page};
+use crate::page::Page;
 
 const RETRIES: usize = 100;
 
@@ -60,8 +60,9 @@ impl FreeList {
     }
 }
 
+#[derive(Debug)]
 pub struct AllocatedPage<'a> {
-    pub page: &'a Page,
+    pub page: &'a mut Page,
     pub free_list_id: usize,
 }
 
@@ -69,7 +70,7 @@ pub struct AllocatedPage<'a> {
 pub struct ConcurrentFreeList<'a> {
     pub next: AtomicPtr<ConcurrentFreeListSlot<'a>>,
     size: usize,
-    pages: Vec<Page>
+    pages: Vec<UnsafeCell<Page>>
 }
 
 #[derive(Debug)]
@@ -77,6 +78,9 @@ pub struct ConcurrentFreeListSlot<'a> {
     pub value: usize,
     pub next: AtomicPtr<ConcurrentFreeListSlot<'a>>,
 }
+
+unsafe impl<'a> Sync for ConcurrentFreeList<'a> {}
+unsafe impl<'a> Sync for ConcurrentFreeListSlot<'a> {}
 
 impl<'a> ConcurrentFreeList<'a> {
     pub fn new(elements: Vec<usize>) -> Self {
@@ -107,7 +111,7 @@ impl<'a> ConcurrentFreeList<'a> {
             pages: {
                 let mut pages = Vec::with_capacity(elements.len());
                 for _ in 0..elements.len() {
-                    pages.push(Page::new(0));
+                    pages.push(UnsafeCell::new(Page::new(0)));
                 }
                 pages
             }
@@ -124,9 +128,9 @@ impl<'a> ConcurrentFreeList<'a> {
             let new_next_ptr = unsafe { next.as_ref() }.next.load(Ordering::Acquire);
 
             if let Ok(next_ptr) = self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::Release, Ordering::Relaxed) {
-                let next = unsafe { &*next_ptr };
+                let next = unsafe { Box::from_raw(next_ptr) };
 
-                return Ok(AllocatedPage { page: &self.pages[next.value], free_list_id: next.value })
+                return Ok(AllocatedPage { page: unsafe {&mut *self.pages[next.value].get()}, free_list_id: next.value })
             }
         }
 

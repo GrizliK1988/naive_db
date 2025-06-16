@@ -289,14 +289,16 @@ fn test_concurrent_free_list_deallocate_page() {
     {
         let size = 10000;
         let free_list = ConcurrentFreeList::new((0..size).collect());
-        for _ in 0..size {
-            let _ = free_list.allocate_page();
+
+        let mut chunks = vec![];
+
+        for chunk in (0..size).collect::<Vec<usize>>().chunks(50) {
+            let mut v = vec![];
+            for _ in chunk {
+                v.push(free_list.allocate_page().unwrap());
+            }
+            chunks.push(v);
         }
-
-        let vec = (0..size).collect::<Vec<usize>>();
-        let chunks = vec.chunks(50);
-
-        let page = Page::new(0);
 
         std::thread::scope(|s| {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -322,14 +324,10 @@ fn test_concurrent_free_list_deallocate_page() {
             for chunk in chunks {
                 let tx = tx.clone();
                 let free_list = &free_list;
-                let page = &page;
 
                 s.spawn(move || {
                     for element in chunk {
-                        let result = free_list.deallocate_page(AllocatedPage { 
-                            page: page,
-                            free_list_id: *element
-                        });
+                        let result = free_list.deallocate_page(element);
                         tx.send(result).unwrap();
                     }
                 });
