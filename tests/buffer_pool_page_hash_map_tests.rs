@@ -1,9 +1,5 @@
-use std::{collections::VecDeque, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}, thread::Scope};
-
 use buffer_pool_page_hash_map::BufferPoolPageHashMap;
-use page::{Page, PageId};
-
-use crate::tuple::{Tuple, TupleValue};
+use crate::{buffer_pool_page_hash_map::InsertPageResult::{NewPage, ExistingPage}, tuple::{Tuple, TupleValue}};
 
 mod util {
     pub mod type_converter {
@@ -32,25 +28,52 @@ fn test_simple() {
     let m = BufferPoolPageHashMap::new(100);
 
     {
-        let mut allocated_page = m.get_page_for_writing(&1).unwrap();
-        let _ = allocated_page.page.write(&Tuple { types: &["integer"], values: vec![TupleValue::Integer(15)] });
-        allocated_page.page.id = 1;
+        let Ok(NewPage(mut page)) = m.insert_page(&1) else {
+            panic!("Cannot insert page");
+        };
+        let _ = page.write(&Tuple { types: &["integer"], values: vec![TupleValue::Integer(15)] });
+        page.id = 1;
     }
 
     {
-        let allocated_page = m.get(&1).unwrap();
-        let tuple = allocated_page.page.read(0, &["integer"]).unwrap();
+        let page = m.read_page(&1).unwrap();
+        let tuple = page.read(0, &["integer"]).unwrap();
 
         assert_eq!(tuple.values[0], TupleValue::Integer(15));
     }
+}
 
-    // {
-    //     let p = Page::new(2);
-    //     m.insert(p).unwrap();
-    // }
+#[test]
+fn test_insert_multithread_simple() {
+    let m = &BufferPoolPageHashMap::new(500);
 
-    // assert_eq!(m.get(1).unwrap().0.as_ref().unwrap().id, 1);
-    // assert_eq!(m.get(2).unwrap().0.as_ref().unwrap().id, 2);
+    std::thread::scope(|s| {
+        for _ in 0..10 {
+            s.spawn(move || {
+                for id in 0..50 {
+                    match m.insert_page(&id) {
+                        Ok(NewPage(mut guard)) => {
+                            println!("New page {}", id);
+
+                            guard.id = id;
+                            guard.data[67] = 1;
+                            guard.data[69] = 7;
+                        },
+                        Ok(ExistingPage(_)) => {
+                            println!("Existing page {}", id);
+                        },
+                        Err(err) => {
+                            println!("Error for page {} {:?}", id, err);
+                        }
+                    };
+                }
+            });
+        }
+    });
+
+    for id in 0..50 {
+        assert_eq!(id, m.read_page(&id).unwrap().id);
+    }
 }
 
 // #[test]
@@ -110,28 +133,6 @@ fn test_simple() {
 //     {
 //         m.insert(Page::new(44)).unwrap();
 //         assert_eq!(m.get(44).unwrap().0.as_ref().unwrap().id, 44);
-//     }
-// }
-
-// #[test]
-// fn test_insert_multithread_simple() {
-//     for _ in 0..1000 {
-//         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
-//         let m = LinearIndirectPageHashMap::new(5);
-    
-//         std::thread::scope(|s| {
-//             for _ in 0..5 {
-//                 let id = ids.pop_front().unwrap();
-//                 let m = Arc::new(&m);
-//                 s.spawn(move || {
-//                     let _ = &m.insert(Page::new(id));
-//                 });
-//             }
-//         });
-    
-//         for id in [31, 44, 53, 78, 87] {
-//             assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
-//         }
 //     }
 // }
 
