@@ -5,10 +5,8 @@ mod persist;
 mod buffer_pool;
 mod hash_map;
 
-use buffer_pool::BufferPool;
-use page::Page;
 use persist::{Reader, Writer};
-use tuple::{ Tuple, TupleValue };
+use tuple::{ TupleValue };
 use fake::{ faker::name::en::Name, faker::internet::en::FreeEmail, rand::random, Fake };
 use std::{ sync::{mpsc::{self, Receiver, Sender}, Arc }, thread::JoinHandle };
 

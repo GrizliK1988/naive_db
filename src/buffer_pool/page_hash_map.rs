@@ -3,18 +3,21 @@ use twox_hash::XxHash3_64;
 use crate::{page::{Page, PageId}, util::free_list::{AllocatedPage, ConcurrentFreeList}};
 
 #[derive(Debug)]
-pub struct KeyOrThumbstone<'a> {
-    allocated_page: AllocatedPage<'a>,
-    is_thumbstone: bool,
+pub struct Entry<'a> {
+    allocated_page: Option<AllocatedPage<'a>>,
 }
 
-impl<'a> KeyOrThumbstone<'a> {
-    fn mark_thumbstone(&mut self) {
-        self.is_thumbstone = true;
-    }
+impl<'a> Entry<'a> {
+    fn page_id(&self) -> Option<&PageId> {
+        let Some(allocated_page) = self.allocated_page.as_ref() else {
+            return None
+        };
 
-    fn page_id(&self) -> &PageId {
-        &self.allocated_page.page.id
+        Some(&allocated_page.page.id)
+    }
+    
+    fn is_thumbstone(&self) -> bool {
+        self.allocated_page.is_none()
     }
 }
 
@@ -24,8 +27,8 @@ pub enum InsertPageResult<'a> {
 }
 
 pub enum InsertPageResultInternal<'a> {
-    NewPage(RwLockWriteGuard<'a, Option<KeyOrThumbstone<'a>>>),
-    ExistingPage(RwLockReadGuard<'a, Option<KeyOrThumbstone<'a>>>),
+    NewPage(RwLockWriteGuard<'a, Option<Entry<'a>>>),
+    ExistingPage(RwLockReadGuard<'a, Option<Entry<'a>>>),
 }
 
 #[derive(Debug)]
@@ -38,7 +41,7 @@ pub enum InsertPageError {
 pub struct BufferPoolPageHashMap<'a> {
     size: usize,
     free_list: ConcurrentFreeList<'a>,
-    pub page_keys: Vec<RwLock<Option<KeyOrThumbstone<'a>>>>,
+    pub page_keys: Vec<RwLock<Option<Entry<'a>>>>,
 }
 
 impl<'a> BufferPoolPageHashMap<'a> {
@@ -59,17 +62,16 @@ impl<'a> BufferPoolPageHashMap<'a> {
 
         match insert_result {
             Ok(InsertPageResultInternal::NewPage(mut guard)) => {
-                *guard = Some(KeyOrThumbstone {
-                    allocated_page,
-                    is_thumbstone: false,
+                *guard = Some(Entry {
+                    allocated_page: Some(allocated_page),
                 });
 
-                let locked_page = RwLockWriteGuard::map(guard,| x | x.as_mut().unwrap().allocated_page.page);
+                let locked_page = RwLockWriteGuard::map(guard,| x | x.as_mut().unwrap().allocated_page.as_mut().unwrap().page);
                 Ok(InsertPageResult::NewPage(locked_page))
             },
             Ok(InsertPageResultInternal::ExistingPage(guard)) => {
                 let _ = self.free_list.deallocate(&allocated_page.free_list_id);
-                let locked_page = RwLockReadGuard::map(guard,| x | x.as_ref().unwrap().allocated_page.page);
+                let locked_page = RwLockReadGuard::map(guard,| x | x.as_ref().unwrap().allocated_page.as_ref().unwrap().page);
                 Ok(InsertPageResult::ExistingPage(locked_page))
             },
             Err(_) => Err(InsertPageError::FailedToInsert)
@@ -88,7 +90,7 @@ impl<'a> BufferPoolPageHashMap<'a> {
             let key_read_guard = self.page_keys[k_idx].upgradable_read();
             let page_key = &*key_read_guard;
 
-            if matches!(page_key, Some(page_key) if !page_key.is_thumbstone && page_key.page_id() != page_id) {
+            if matches!(page_key, Some(page_key) if !page_key.is_thumbstone() && page_key.page_id().unwrap() != page_id) {
                 k += 1;
 
                 if k == key+keys_size {
@@ -98,7 +100,7 @@ impl<'a> BufferPoolPageHashMap<'a> {
                 continue;
             }
 
-            if matches!(page_key, Some(page_key) if !page_key.is_thumbstone && page_key.page_id() == page_id) {
+            if matches!(page_key, Some(page_key) if !page_key.is_thumbstone() && page_key.page_id().unwrap() == page_id) {
                 return Ok(InsertPageResultInternal::ExistingPage(RwLockUpgradableReadGuard::downgrade(key_read_guard)))
             }
 
@@ -123,10 +125,10 @@ impl<'a> BufferPoolPageHashMap<'a> {
             let key_read_guard = self.page_keys[k_idx].read();
 
             match &*key_read_guard {
-                Some(page_key) if !page_key.is_thumbstone && page_key.page_id() == page_id => {
-                    break Some(RwLockReadGuard::map(key_read_guard, | x | &*x.as_ref().unwrap().allocated_page.page))
+                Some(page_key) if !page_key.is_thumbstone() && page_key.page_id().unwrap() == page_id => {
+                    break Some(RwLockReadGuard::map(key_read_guard, | x | &*x.as_ref().unwrap().allocated_page.as_ref().unwrap().page))
                 },
-                Some(page_key) if !page_key.is_thumbstone && page_key.page_id() != page_id => {
+                Some(page_key) if !page_key.is_thumbstone() && page_key.page_id().unwrap() != page_id => {
                     k += 1;
 
                     if k == key + keys_size {
