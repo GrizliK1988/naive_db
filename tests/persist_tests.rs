@@ -18,10 +18,10 @@ mod persist {
 
 use std::fs;
 
+use fake::{Fake, faker::internet::en::FreeEmail, faker::name::en::Name, rand::random};
 use page::Page;
 use persist::{Reader, Writer};
 use tuple::{Tuple, TupleValue};
-use fake::{ faker::name::en::Name, faker::internet::en::FreeEmail, rand::random, Fake };
 
 #[test]
 fn test_persist_single_page() {
@@ -35,18 +35,25 @@ fn test_persist_single_page() {
         email.truncate(i8::MAX as usize - 1);
 
         let tuple = Tuple {
-            types: &[ "integer", "varchar", "varchar" ],
-            values: vec![ TupleValue::Integer(random::<i32>()), TupleValue::Varchar(name), TupleValue::Varchar(email) ],
+            types: &["integer", "varchar", "varchar"],
+            values: vec![
+                TupleValue::Integer(random::<i32>()),
+                TupleValue::Varchar(name),
+                TupleValue::Varchar(email),
+            ],
         };
 
         if !p.has_space(&tuple).unwrap() {
             break;
         }
-    
+
         p.write(&tuple).unwrap();
     }
 
-    println!("Page prepared. Slots: {}. Spare space: {}", p.slots, p.free_space);
+    println!(
+        "Page prepared. Slots: {}. Spare space: {}",
+        p.slots, p.free_space
+    );
 
     match fs::remove_file("./01_single_page") {
         _ => {}
@@ -55,11 +62,12 @@ fn test_persist_single_page() {
     let writer = Writer::new(".", "01_single_page");
     writer.insert_page(&p).unwrap();
 
-    let mut reader = Reader::new(".", "01_single_page");
-    let read_page = reader.read_page(0).unwrap();
+    let reader = Reader::new(".", "01_single_page");
+    let mut page = Page::new(0);
 
-    assert_eq!(p.data, read_page.data);
+    reader.read_page(0, &mut page).unwrap();
+
+    assert_eq!(p.data, page.data);
 
     fs::remove_file("./01_single_page").unwrap();
 }
-

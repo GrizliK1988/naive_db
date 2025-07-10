@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 const BITMAP_CELL_SIZE: usize = 8;
 const RETRIES: usize = 10;
 
+#[derive(Debug)]
 pub struct Clock {
     size: usize,
     clock: AtomicUsize,

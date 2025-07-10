@@ -12,6 +12,10 @@ mod page {
     include!("../src/page.rs");
 }
 
+mod persist {
+    include!("../src/persist.rs");
+}
+
 mod buffer_pool {
     include!("../src/buffer_pool/mod.rs");
 }

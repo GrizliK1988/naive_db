@@ -1,4 +1,8 @@
-use std::{cell::UnsafeCell, ptr::NonNull, sync::atomic::{AtomicPtr, Ordering}};
+use std::{
+    cell::UnsafeCell,
+    ptr::NonNull,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 use crate::page::Page;
 
@@ -7,32 +11,27 @@ const RETRIES: usize = 100;
 #[derive(Clone, PartialEq, Debug)]
 pub struct FreeList {
     pub value: Option<usize>,
-    pub next: Option<Box<FreeList>>
+    pub next: Option<Box<FreeList>>,
 }
 
 impl FreeList {
     pub fn new(elements: Vec<usize>) -> FreeList {
-        elements
-            .iter()
-            .rev()
-            .fold(
-                FreeList {
+        elements.iter().rev().fold(
+            FreeList {
                 value: None,
-                next: None
+                next: None,
+            },
+            |acc, &element| match acc.value {
+                Some(_) => FreeList {
+                    value: Some(element),
+                    next: Some(Box::from(acc)),
                 },
-                | acc, &element | {
-                    match acc.value {
-                        Some(_) => FreeList {
-                            value: Some(element),
-                            next: Some(Box::from(acc))
-                        },
-                        None => FreeList {
-                            value: Some(element),
-                            next: None
-                        }
-                    }
-                }
-            )
+                None => FreeList {
+                    value: Some(element),
+                    next: None,
+                },
+            },
+        )
     }
 
     pub fn add(&mut self, element: usize) {
@@ -40,7 +39,7 @@ impl FreeList {
             value: None,
             next: None,
         };
-        
+
         std::mem::swap(self, &mut new_next);
 
         *self = FreeList {
@@ -70,7 +69,7 @@ pub struct AllocatedPage<'a> {
 pub struct ConcurrentFreeList<'a> {
     pub next: AtomicPtr<ConcurrentFreeListSlot<'a>>,
     size: usize,
-    pages: Vec<UnsafeCell<Page>>
+    pages: Vec<UnsafeCell<Page>>,
 }
 
 #[derive(Debug)]
@@ -99,7 +98,7 @@ impl<'a> ConcurrentFreeList<'a> {
         for element in elements.iter().rev().skip(1) {
             let slot = Box::into_raw(Box::new(ConcurrentFreeListSlot {
                 value: *element,
-                next: AtomicPtr::new(prev_slot)
+                next: AtomicPtr::new(prev_slot),
             }));
 
             prev_slot = slot;
@@ -114,23 +113,31 @@ impl<'a> ConcurrentFreeList<'a> {
                     pages.push(UnsafeCell::new(Page::new(0)));
                 }
                 pages
-            }
+            },
         }
     }
 
     pub fn allocate_page(&self) -> Result<AllocatedPage, ()> {
         for _ in 0..RETRIES {
             let Some(next) = NonNull::new(self.next.load(Ordering::Acquire)) else {
-                return Err(())
+                return Err(());
             };
 
             let next_ptr = next.as_ptr();
             let new_next_ptr = unsafe { next.as_ref() }.next.load(Ordering::Acquire);
 
-            if let Ok(next_ptr) = self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::Release, Ordering::Relaxed) {
+            if let Ok(next_ptr) = self.next.compare_exchange(
+                next_ptr,
+                new_next_ptr,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
                 let next = unsafe { Box::from_raw(next_ptr) };
 
-                return Ok(AllocatedPage { page: unsafe {&mut *self.pages[next.value].get()}, free_list_id: next.value })
+                return Ok(AllocatedPage {
+                    page: unsafe { &mut *self.pages[next.value].get() },
+                    free_list_id: next.value,
+                });
             }
         }
 
@@ -140,24 +147,29 @@ impl<'a> ConcurrentFreeList<'a> {
     pub fn allocate(&self) -> Result<usize, ()> {
         for _ in 0..RETRIES {
             let Some(next) = NonNull::new(self.next.load(Ordering::Acquire)) else {
-                return Err(())
+                return Err(());
             };
 
             let next_ptr = next.as_ptr();
             let new_next_ptr = unsafe { next.as_ref() }.next.load(Ordering::Acquire);
 
-            if let Ok(next_ptr) = self.next.compare_exchange(next_ptr, new_next_ptr, Ordering::Release, Ordering::Relaxed) {
+            if let Ok(next_ptr) = self.next.compare_exchange(
+                next_ptr,
+                new_next_ptr,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
                 let next = unsafe { &*next_ptr };
 
-                return Ok(next.value)
+                return Ok(next.value);
             }
         }
 
         Err(())
     }
 
-    pub fn deallocate_page(&self, page: AllocatedPage<'a>) -> Result<(), AllocatedPage<'a>> {
-        for _ in 0..RETRIES {
+    pub fn deallocate_page(&self, page: AllocatedPage<'a>) {
+        loop {
             let next_ptr = self.next.load(Ordering::Acquire);
 
             let new_next = Box::into_raw(Box::new(ConcurrentFreeListSlot {
@@ -165,12 +177,13 @@ impl<'a> ConcurrentFreeList<'a> {
                 next: AtomicPtr::new(next_ptr.clone()),
             }));
 
-            if let Ok(_) = self.next.compare_exchange(next_ptr, new_next, Ordering::Release, Ordering::Relaxed) {
-                return Ok(())
+            if let Ok(_) =
+                self.next
+                    .compare_exchange(next_ptr, new_next, Ordering::Release, Ordering::Relaxed)
+            {
+                break;
             }
         }
-
-        Err(page)
     }
 
     pub fn deallocate(&self, element: &usize) -> Result<(), ()> {
@@ -182,8 +195,11 @@ impl<'a> ConcurrentFreeList<'a> {
                 next: AtomicPtr::new(next_ptr.clone()),
             }));
 
-            if let Ok(_) = self.next.compare_exchange(next_ptr, new_next, Ordering::Release, Ordering::Relaxed) {
-                return Ok(())
+            if let Ok(_) =
+                self.next
+                    .compare_exchange(next_ptr, new_next, Ordering::Release, Ordering::Relaxed)
+            {
+                return Ok(());
             }
         }
 

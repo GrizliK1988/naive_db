@@ -1,7 +1,7 @@
-use std::{collections::VecDeque, ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}, thread::Scope};
+use std::{collections::VecDeque, sync::Arc};
 
 use hash_map::LinearIndirectPageHashMap;
-use page::{Page, PageId};
+use page::Page;
 
 mod util {
     pub mod type_converter {
@@ -85,7 +85,7 @@ fn test_conflicting_inserts_with_deletes() {
 
 #[test]
 fn test_delete() {
-    let mut m = LinearIndirectPageHashMap::new(5);
+    let m = LinearIndirectPageHashMap::new(5);
 
     {
         m.insert(Page::new(31)).unwrap();
@@ -108,7 +108,7 @@ fn test_insert_multithread_simple() {
     for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
         let m = LinearIndirectPageHashMap::new(5);
-    
+
         std::thread::scope(|s| {
             for _ in 0..5 {
                 let id = ids.pop_front().unwrap();
@@ -118,7 +118,7 @@ fn test_insert_multithread_simple() {
                 });
             }
         });
-    
+
         for id in [31, 44, 53, 78, 87] {
             assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
         }
@@ -129,7 +129,7 @@ fn test_insert_multithread_simple() {
 fn test_insert_multithread_large() {
     for _ in 0..10 {
         let m = LinearIndirectPageHashMap::new(5000);
-    
+
         std::thread::scope(|s| {
             for id in 0..5000 {
                 let m = Arc::new(&m);
@@ -138,7 +138,7 @@ fn test_insert_multithread_large() {
                 });
             }
         });
-    
+
         for id in 0..5000 {
             assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
         }
@@ -150,7 +150,7 @@ fn test_insert_multithread_simple_with_deletes() {
     for _ in 0..1000 {
         let mut ids: VecDeque<u64> = vec![31, 44, 53, 78, 87, 104, 106, 125, 126, 127, 128].into();
         let m = LinearIndirectPageHashMap::new(5);
-    
+
         std::thread::scope(|s| {
             let (tx, rx) = std::sync::mpsc::channel::<u64>();
 
@@ -170,15 +170,15 @@ fn test_insert_multithread_simple_with_deletes() {
 
                     if id == 44 || id == 78 {
                         tx.send(id).unwrap();
-                    } 
+                    }
                 });
             }
         });
 
         m.insert(Page::new(14)).unwrap();
         m.insert(Page::new(77)).unwrap();
-    
-        for id in [31, /*44, */53, /*78, */87, 14, 77] {
+
+        for id in [31, /*44, */ 53, /*78, */ 87, 14, 77] {
             assert_eq!(id, m.get(id).unwrap().0.as_ref().unwrap().id);
         }
     }
