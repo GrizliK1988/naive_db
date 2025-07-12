@@ -39,8 +39,8 @@ pub enum InsertPageResultInternal<'a> {
 }
 
 #[derive(Debug)]
-pub enum InsertPageError {
-    NoFreeSlot,
+pub enum InsertPageError<'a> {
+    NoFreeSlot(&'a str),
     FailedToInsert,
 }
 
@@ -68,9 +68,10 @@ impl<'a> BufferPoolPageHashMap<'a> {
     pub fn insert_page(
         &'a self,
         page_id: &PageId,
-    ) -> Result<InsertPageResult<'a>, InsertPageError> {
-        let Ok(allocated_page) = self.try_allocate_page() else {
-            return Err(InsertPageError::NoFreeSlot);
+    ) -> Result<InsertPageResult<'a>, InsertPageError<'a>> {
+        let allocate_result = self.try_allocate_page();
+        let Ok(allocated_page) = allocate_result else {
+            return Err(InsertPageError::NoFreeSlot(allocate_result.err().unwrap()));
         };
 
         let insert_result = self.try_insert_page(page_id);
@@ -101,21 +102,30 @@ impl<'a> BufferPoolPageHashMap<'a> {
         }
     }
 
-    fn try_allocate_page(&'a self) -> Result<AllocatedPage<'a>, ()> {
-        match self.free_list.allocate_page() {
-            Ok(allocated_page) => Ok(allocated_page),
-            Err(_) => {
-                let victim_key_index = self.clock.find_victim_key()?;
+    fn try_allocate_page(&'a self) -> Result<AllocatedPage<'a>, &'a str> {
+        for _ in 0..10 {
+            match self.free_list.allocate_page() {
+                Ok(allocated_page) => return Ok(allocated_page),
+                Err(_) => {
+                    let victim_key_index = self
+                        .clock
+                        .find_victim_key()
+                        .or(Err("Cannot find victim key"))?;
 
-                let mut guard = self.page_keys[victim_key_index].write();
-                let page_key = guard.as_mut().ok_or(())?;
-                let allocated_page = page_key.allocated_page.take().ok_or(())?;
+                    let mut guard = self.page_keys[victim_key_index].write();
+                    let page_key = guard.as_mut().ok_or("Cannot get lock")?;
+                    let Some(allocated_page) = page_key.allocated_page.take() else {
+                        continue;
+                    };
 
-                self.clock.track_delete(&victim_key_index);
+                    self.clock.track_delete(&victim_key_index);
 
-                Ok(allocated_page)
-            }
+                    return Ok(allocated_page);
+                }
+            };
         }
+
+        Err("Cannot find a slot after several retries")
     }
 
     fn try_insert_page(&'a self, page_id: &PageId) -> Result<InsertPageResultInternal<'a>, ()> {

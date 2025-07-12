@@ -1,7 +1,7 @@
 use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard};
 
 use crate::{
-    buffer_pool::page_hash_map::{BufferPoolPageHashMap, InsertPageResult},
+    buffer_pool::page_hash_map::{BufferPoolPageHashMap, InsertPageError, InsertPageResult},
     page::{Page, PageId},
     persist::Reader,
 };
@@ -41,6 +41,12 @@ pub struct BufferPool<'a> {
     reader: Reader,
 }
 
+#[derive(Debug)]
+pub enum GetPageError<'a> {
+    FailedToInsert(InsertPageError<'a>),
+    FailedToReadFromDisk,
+}
+
 impl<'a> BufferPool<'a> {
     pub fn new(size: usize, reader: Reader) -> BufferPool<'a> {
         BufferPool {
@@ -49,19 +55,22 @@ impl<'a> BufferPool<'a> {
         }
     }
 
-    pub fn get(&'a self, page_id: PageId) -> Result<ReadPageGuard<'a>, ()> {
+    pub fn get(&'a self, page_id: PageId) -> Result<ReadPageGuard<'a>, GetPageError<'a>> {
         if let Some(read_guard) = self.page_map.read_page(&page_id) {
             return Ok(ReadPageGuard::new_page_from_pool(read_guard));
         }
 
-        let Ok(insert_result) = self.page_map.insert_page(&page_id) else {
-            return Err(());
+        let insert_result = self.page_map.insert_page(&page_id);
+        let Ok(insert_result) = insert_result else {
+            return Err(GetPageError::FailedToInsert(insert_result.err().unwrap()));
         };
 
         match insert_result {
             InsertPageResult::ExistingPage(guard) => Ok(ReadPageGuard::new_page_from_pool(guard)),
             InsertPageResult::NewPage(mut write_guard) => {
-                self.reader.read_page(page_id, &mut *write_guard)?;
+                let Ok(_) = self.reader.read_page(page_id, &mut *write_guard) else {
+                    return Err(GetPageError::FailedToReadFromDisk);
+                };
                 write_guard.id = page_id;
                 write_guard.refresh_metadata();
 

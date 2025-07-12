@@ -7,12 +7,13 @@ mod util;
 
 use persist::Reader;
 
-use crate::{buffer_pool::buffer_pool::BufferPool, tuple::TupleValue};
+use crate::buffer_pool::buffer_pool::BufferPool;
 
 fn main() {
     let reader = Reader::new("./data", "simple.data");
     let page_number = reader.page_count();
     let pool = BufferPool::new(2 ^ 17, reader);
+    let pool_ref = &pool;
 
     loop {
         println!("Select an action:");
@@ -30,25 +31,32 @@ fn main() {
 
                 let start_time = std::time::Instant::now();
 
-                for i in 0..page_number {
-                    let page = pool.get(i).unwrap();
+                std::thread::scope(|s| {
+                    for j in 0..8 {
+                        s.spawn(move || {
+                            for i in j * page_number / 8..(j + 1) * page_number / 8 {
+                                if i >= page_number {
+                                    break;
+                                }
 
-                    for tuple_data in page.get().read_iterator_raw() {
-                        // let id = i32::from_be_bytes(tuple_data[0..4].try_into().unwrap());
-                        let id = ((tuple_data[0] as i32) << 24)
-                            | ((tuple_data[1] as i32) << 16)
-                            | ((tuple_data[2] as i32) << 8)
-                            | (tuple_data[3] as i32);
+                                let result = pool_ref.get(i);
+                                let Ok(page) = result else {
+                                    println!("Page cant be read {:?}", result.err().unwrap());
+                                    panic!("");
+                                };
 
-                        // let TupleValue::Integer(id) = tuple.values[0] else {
-                        //     panic!("First value of a tuple is not integer");
-                        // };
+                                for tuple_data in page.get().read_iterator_raw() {
+                                    let id =
+                                        i32::from_be_bytes(tuple_data[0..4].try_into().unwrap());
 
-                        if id < 140651032 && id > 140641012 {
-                            // println!("Found in page {}. id: {}", i, id);
-                        }
+                                    if id < 140651032 && id > 140641012 {
+                                        println!("Found in page {}. id: {}", i, id);
+                                    }
+                                }
+                            }
+                        });
                     }
-                }
+                });
 
                 let duration = start_time.elapsed();
                 println!("Time taken: {:?}", duration);
