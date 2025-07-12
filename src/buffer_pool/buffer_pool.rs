@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(dead_code))]
+
 use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard};
 
 use crate::{

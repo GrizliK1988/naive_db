@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(dead_code))]
+
 use crate::{
     buffer_pool::clock::Clock,
     page::{Page, PageId},

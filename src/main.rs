@@ -1,5 +1,5 @@
+#![cfg_attr(test, allow(dead_code))]
 mod buffer_pool;
-mod hash_map;
 mod page;
 mod persist;
 mod tuple;
